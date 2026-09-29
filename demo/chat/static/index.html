@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Apple Chat | Evolutions-demo</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/chat.js" defer></script>
+</head>
+<body>
+<main>
+  <header><div><p class="eyebrow">EVOLUTIONS-DEMO · FOUR-METRIC EVALUATION</p><h1>Apple Chat</h1></div>
+    <button id="reset" type="button">New conversation</button>
+  </header>
+  <p>Ask in English about apple varieties, growing, storage or recipes. Replies are in English.</p>
+  <aside>Synthetic test data only. Questions, responses and conversation history are
+    stored in Azure and evaluated by a separate judge model. Logs appear with a delay:
+    submission does not guarantee ingestion. Model topic restrictions are not foolproof.</aside>
+  <section id="messages" aria-label="Conversation" aria-live="polite"></section>
+  <p id="error" role="alert"></p>
+  <form id="chat-form">
+    <label for="query">Question</label>
+    <textarea id="query" rows="3" maxlength="1000" required aria-describedby="query-help"
+      placeholder="What is the best way to store apples?"></textarea>
+    <div class="actions"><small id="query-help">Enter to send; Shift+Enter for a new line.
+      Maximum 1,000 UTF-8 bytes. History is never silently truncated.</small>
+      <button id="send" type="submit">Send</button></div>
+  </form>
+  <p id="status" role="status">Opening a conversation…</p>
+  <footer>Evaluation runs as a separate Python command: apple scope, fluency, coherence
+    and unnecessary refusal. Reports are stored in the local artifacts folder, not on this page.</footer>
+</main>
+</body>
+</html>

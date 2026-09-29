@@ -1,0 +1,51 @@
+sequenceDiagram
+    autonumber
+    actor User as User / operator
+    participant UI as Browser
+    participant Chat as Local FastAPI
+    participant Model as Foundry chat model
+    participant Logs as App Insights / Log Analytics
+    participant CLI as Local evaluation CLI
+    participant Evals as Foundry Evals + judge
+
+    User->>UI: Open chat
+    UI->>Chat: Create conversation
+    Chat-->>UI: Conversation ID
+    loop Each chat turn
+        User->>UI: Question + Enter / Send
+        UI->>Chat: Question + conversation ID
+        Chat->>Chat: Validate limits, read history
+        Chat->>Model: Instructions + history + question
+        Model-->>Chat: Original answer + metadata
+        Chat->>Chat: Validate answer, build turn with IDs
+        Chat->>Logs: OpenTelemetry turn record + flush
+        Note over Chat,Logs: Technical traces are also collected.<br/>Flush does NOT confirm searchable ingestion.
+        Chat->>Chat: Update server-owned history
+        Chat-->>UI: Answer + turn ID + trace ID
+        UI-->>User: Display answer
+    end
+
+    Note over Logs,CLI: Later, after ingestion delay.<br/>The chat server may be stopped.
+    User->>CLI: Run evaluation command
+    CLI->>CLI: Freeze UTC window
+    CLI->>Logs: Query original turns in window
+    Logs-->>CLI: Payloads + hashes + IDs
+    CLI->>CLI: Preserve, validate, deduplicate, snapshot
+    alt Successful query has no turns
+        CLI-->>User: no_data report, null rates, exit 0
+    else Turns available
+        CLI->>CLI: Validate English dataset and size
+        CLI->>Evals: Versioned criteria + original dataset
+        Evals-->>CLI: Eval ID + run ID
+        CLI->>CLI: Persist IDs in manifest
+        Note over Evals: Judge ORIGINAL answers:<br/>scope, fluency, coherence,<br/>unnecessary refusal.
+        loop Until completed or timeout
+            CLI->>Evals: Read status
+            Evals-->>CLI: Status
+        end
+        CLI->>Evals: Fetch all output pages
+        Evals-->>CLI: Per-turn scores and reasons
+        CLI->>CLI: Verify originals, save results and reports
+        CLI-->>User: Report path, exit 0 for quality findings
+    end
+    Note over CLI,Evals: Technical errors preserve available evidence and exit nonzero.<br/>Timed-out remote runs may continue.
