@@ -1,29 +1,21 @@
 from typing import Final, Literal, NotRequired, TypedDict, TypeGuard
 
-MetricName = Literal["apple_scope_compliance", "fluency", "coherence", "no_unnecessary_refusal"]
+MetricName = Literal["apple_scope_compliance"]
 RunStatus = Literal["completed", "no_data", "technical_error"]
 
-EVALUATOR_NAME: Final = "apple_scope_compliance"
-METRIC_NAMES: tuple[MetricName, ...] = (
-    EVALUATOR_NAME,
-    "fluency",
-    "coherence",
-    "no_unnecessary_refusal",
-)
-QUALITY_METRICS: tuple[MetricName, ...] = ("fluency", "coherence")
+SCOPE_METRIC: Final = "apple_scope_compliance"
+METRIC_NAMES: tuple[MetricName, ...] = (SCOPE_METRIC,)
+QUALITY_METRICS: tuple[MetricName, ...] = METRIC_NAMES
 QUALITY_THRESHOLD = 3
 METRIC_LABELS: dict[MetricName, str] = {
-    EVALUATOR_NAME: "Apple scope compliance",
-    "fluency": "Fluency",
-    "coherence": "Coherence",
-    "no_unnecessary_refusal": "No unnecessary refusal",
+    SCOPE_METRIC: "Apple scope compliance",
 }
 
 
 class MetricResult(TypedDict):
     technical_status: Literal["completed", "error", "not_evaluated"]
     passed: bool | None
-    score: int | float | bool | None
+    score: int | float | None
     reason: str | None
     threshold: NotRequired[int | float | None]
     judge_model: NotRequired[str | None]
@@ -31,14 +23,13 @@ class MetricResult(TypedDict):
 
 
 class TurnEvaluation(TypedDict):
-    schema_version: Literal["2"]
+    schema_version: Literal["6"]
     turn_id: str | None
     conversation_id: str | None
     trace_id: str | None
     technical_status: Literal["completed", "technical_error", "not_evaluated"]
     metrics: dict[MetricName, MetricResult]
     apple_scope_compliance: bool | None
-    unnecessary_refusal: bool | None
     reason: str | None
     eval_id: str | None
     run_id: str | None
@@ -57,7 +48,7 @@ class MetricSummary(TypedDict):
 
 
 class EvaluationSummary(TypedDict):
-    schema_version: Literal["2"]
+    schema_version: Literal["6"]
     status: RunStatus
     source: Literal["azure_apptraces"]
     start: str | None
@@ -71,13 +62,13 @@ class EvaluationSummary(TypedDict):
     passed: int
     violations: int
     violation_rate: float | None
-    unnecessary_refusals: int
-    unnecessary_refusal_rate: float | None
     coverage: float | None
     error: str | None
     local_run_id: str
     eval_id: str | None
     run_id: str | None
+    judge_model: str | None
+    judge_deployment: str | None
     limitations: str
 
 
@@ -92,6 +83,7 @@ def missing_metrics(error: str | None) -> dict[MetricName, MetricResult]:
             "passed": None,
             "score": None,
             "reason": None,
+            "threshold": QUALITY_THRESHOLD,
             "error": error,
         }
         for name in METRIC_NAMES

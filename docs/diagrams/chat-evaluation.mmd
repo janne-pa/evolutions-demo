@@ -6,7 +6,7 @@ sequenceDiagram
     participant Model as Foundry chat model
     participant Logs as App Insights / Log Analytics
     participant CLI as Local evaluation CLI
-    participant Evals as Foundry Evals + judge
+    participant Judge as Microsoft-Decision-1
 
     User->>UI: Open chat
     UI->>Chat: Create conversation
@@ -35,17 +35,12 @@ sequenceDiagram
         CLI-->>User: no_data report, null rates, exit 0
     else Turns available
         CLI->>CLI: Validate English dataset and size
-        CLI->>Evals: Versioned criteria + original dataset
-        Evals-->>CLI: Eval ID + run ID
-        CLI->>CLI: Persist IDs in manifest
-        Note over Evals: Judge ORIGINAL answers:<br/>scope, fluency, coherence,<br/>unnecessary refusal.
-        loop Until completed or timeout
-            CLI->>Evals: Read status
-            Evals-->>CLI: Status
+        loop Each original turn
+            CLI->>Judge: Original query, response, context + apple policy rubric
+            Judge-->>CLI: One native apple policy score (0-4) + token usage
+            CLI->>CLI: Verify and save raw output and per-turn scores
         end
-        CLI->>Evals: Fetch all output pages
-        Evals-->>CLI: Per-turn scores and reasons
-        CLI->>CLI: Verify originals, save results and reports
+        CLI->>CLI: Summarize results and reports
         CLI-->>User: Report path, exit 0 for quality findings
     end
-    Note over CLI,Evals: Technical errors preserve available evidence and exit nonzero.<br/>Timed-out remote runs may continue.
+    Note over CLI,Judge: Scores below 3 fail, scores 3-4 pass.<br/>Technical errors preserve evidence and exit nonzero.

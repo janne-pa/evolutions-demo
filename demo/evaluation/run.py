@@ -6,13 +6,16 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from azure.ai.projects import AIProjectClient
 from azure.core.exceptions import AzureError
 from azure.monitor.query import LogsQueryClient
-from openai import OpenAIError
 
 from demo.contracts import ChatTurn, utc_now, utc_text
-from demo.evaluation.foundry import evaluate
+from demo.evaluation.decision import (
+    JUDGE_MODEL,
+    JUDGE_MODEL_VERSION,
+    JUDGE_PROMPT_VERSION,
+    evaluate,
+)
 from demo.evaluation.logs import fetch, snapshot_rows
 from demo.evaluation.models import RunStatus
 from demo.evaluation.progress import progress
@@ -55,7 +58,7 @@ def time_window(
 
 def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(
-        description="Evaluate original English Apple Chat responses using four independent metrics."
+        description="Score original English Apple Chat responses with Microsoft-Decision-1."
     )
     command.add_argument("--lookback-hours", type=float, default=None)
     command.add_argument("--start")
@@ -90,7 +93,10 @@ def main(argv: list[str] | None = None) -> int:
         settings = Settings.load()
         report.update(
             project_endpoint=settings.endpoint,
+            judge_model=JUDGE_MODEL,
             judge_deployment=settings.judge_deployment,
+            judge_model_version=JUDGE_MODEL_VERSION,
+            judge_prompt_version=JUDGE_PROMPT_VERSION,
             workspace_id=settings.workspace_id,
             query_started_at=utc_text(utc_now()),
         )
@@ -115,15 +121,11 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError(
                         "Inline dataset exceeds the 5 MB demo limit. Narrow the interval."
                     )
-                with (
-                    progress(f"Evaluating responses ({fetched})"),
-                    AIProjectClient(
-                        endpoint=settings.endpoint, credential=auth, retry_total=0
-                    ) as project,
-                ):
+                with progress(f"Scoring responses ({fetched})"):
                     for result in evaluate(
-                        project,
+                        settings.resource_endpoint,
                         settings.judge_deployment,
+                        auth,
                         turns,
                         report.update,
                         report.append_raw,
@@ -134,7 +136,6 @@ def main(argv: list[str] | None = None) -> int:
             exit_code = 0
     except (
         AzureError,
-        OpenAIError,
         ValueError,
         RuntimeError,
         OSError,
@@ -145,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
         failure = f"{type(error).__name__}: {error}"
         LOG.error("Evaluation failed: %s", failure)
     except KeyboardInterrupt:
-        failure = "Interrupted. The Foundry run may continue; check the manifest run_id."
+        failure = "Interrupted during Decision-1 evaluation. Completed per-turn results remain."
         LOG.error(failure)
         exit_code = 130
     finally:

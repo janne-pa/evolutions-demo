@@ -5,14 +5,42 @@ from uuid import uuid4
 
 import pytest
 
-from demo.evaluation.foundry import BUILTIN_VERSIONS, CUSTOM_PROMPTS
+from demo.evaluation.decision import RUBRICS
 from demo.evaluation.models import (
     METRIC_NAMES,
     QUALITY_METRICS,
     is_metric_name,
     missing_metrics,
 )
-from demo.evaluation.reports import Reports, build_summary, render_console, render_markdown
+from demo.evaluation.reports import (
+    Reports,
+    build_summary,
+    render_console,
+    render_markdown,
+    render_turn_table,
+)
+
+
+def test_turn_table_preserves_original_text_and_independent_scores(turn, evaluation_result):
+    turn = turn.model_copy(update={"query": "Apples | <script>\n**test**"})
+    evaluation_result["metrics"]["apple_scope_compliance"].update(score=2.5, passed=False)
+    markdown = render_turn_table([turn], [evaluation_result])
+    assert "| 1 |" in markdown
+    assert "Apples &#124; &lt;script&gt;<br>&#42;&#42;test&#42;&#42;" in markdown
+    assert turn.response in markdown
+    assert "Apple scope compliance: 2.50/4" in markdown
+    assert "Apple scope compliance: review required (score &lt; 3)." in markdown
+    assert str(turn.turn_id) in markdown
+    assert "not a model-generated explanation" in markdown
+
+
+def test_turn_table_includes_every_turn_and_missing_scores(turn, evaluation_result):
+    second = turn.model_copy(update={"turn_id": uuid4()})
+    markdown = render_turn_table([turn, second], [evaluation_result])
+    assert "| 1 |" in markdown and "| 2 |" in markdown
+    assert markdown.count("Turn ID:") == 2
+    assert "Apple scope compliance: N/A" in markdown
+    assert "Apple scope compliance: not evaluated." in markdown
 
 
 @pytest.fixture
@@ -27,10 +55,8 @@ def manifest():
     }
 
 
-def test_metric_definitions_match_foundry_configuration():
-    assert set(QUALITY_METRICS) == set(BUILTIN_VERSIONS)
-    assert set(METRIC_NAMES) == set(CUSTOM_PROMPTS) | set(BUILTIN_VERSIONS)
-    assert not set(CUSTOM_PROMPTS) & set(BUILTIN_VERSIONS)
+def test_metric_definitions_match_decision_rubrics():
+    assert set(QUALITY_METRICS) == set(METRIC_NAMES) == set(RUBRICS)
     assert all(is_metric_name(name) for name in METRIC_NAMES)
     assert not is_metric_name("unknown")
     assert not is_metric_name(None)
@@ -42,16 +68,13 @@ def test_summary_has_independent_denominators_and_does_not_mutate_inputs(
 ):
     first = evaluation_result
     first["metrics"]["apple_scope_compliance"]["passed"] = False
-    first["metrics"]["no_unnecessary_refusal"]["passed"] = False
-    first["metrics"]["fluency"].update(score=2, passed=False)
-    first.update(apple_scope_compliance=False, unnecessary_refusal=True)
+    first["metrics"]["apple_scope_compliance"].update(score=2, passed=False)
+    first.update(apple_scope_compliance=False)
     second = deepcopy(evaluation_result)
     second["turn_id"] = "second-turn"
     second["technical_status"] = "technical_error"
-    second["metrics"]["apple_scope_compliance"]["passed"] = True
-    second["metrics"]["no_unnecessary_refusal"]["passed"] = True
-    second["metrics"]["fluency"] = missing_metrics("Missing fluency")["fluency"]
-    second.update(apple_scope_compliance=True, unnecessary_refusal=False)
+    second["metrics"] = missing_metrics("Missing score")
+    second.update(apple_scope_compliance=None)
     results = [first, second]
     before = deepcopy((results, manifest))
 
@@ -61,10 +84,10 @@ def test_summary_has_independent_denominators_and_does_not_mutate_inputs(
     assert summary["evaluated"] == 1
     assert summary["not_evaluated"] == 2
     assert summary["coverage"] == 1 / 3
-    assert summary["scope_evaluated"] == 2
-    assert summary["violation_rate"] == 0.5
-    assert summary["unnecessary_refusal_rate"] == 0.5
-    assert summary["metrics"]["fluency"] == {
+    assert summary["scope_evaluated"] == 1
+    assert summary["violation_rate"] == 1.0
+    assert "unnecessary_refusal_rate" not in summary
+    assert summary["metrics"]["apple_scope_compliance"] == {
         "evaluated": 1,
         "not_evaluated": 2,
         "passed": 0,
@@ -73,15 +96,11 @@ def test_summary_has_independent_denominators_and_does_not_mutate_inputs(
         "coverage": 1 / 3,
         "mean_score": 2.0,
     }
-    assert summary["metrics"]["coherence"]["evaluated"] == 2
-    assert summary["metrics"]["coherence"]["mean_score"] == 4.0
-    assert summary["metrics"]["apple_scope_compliance"]["mean_score"] is None
+    assert summary["metrics"]["apple_scope_compliance"]["mean_score"] == 2.0
     console = render_console(summary)
     assert "Evaluation incomplete (technical_error)." in console
     assert "Responses fetched: 3; fully evaluated: 1." in console
-    assert "Writing fluency:        0/1 passed - review 1 response; 2 not evaluated" in console
-    assert "Coherence:              2/2 passed; 1 not evaluated" in console
-    assert "Unnecessary refusals:   1 detected (2 evaluated); 1 not evaluated" in console
+    assert "Apple-only scope:       0/1 passed - review 1 response; 2 not evaluated" in console
 
 
 @pytest.mark.parametrize(
@@ -95,14 +114,14 @@ def test_empty_and_failed_queries_are_not_successful_judgments(manifest, status,
     assert summary["not_evaluated"] == fetched
     assert summary["evaluated"] == 0
     assert summary["violation_rate"] is None
-    assert summary["unnecessary_refusal_rate"] is None
+    assert "unnecessary_refusal_rate" not in summary
     assert summary["coverage"] is None
     for metric in summary["metrics"].values():
         assert metric["pass_rate"] is None
         assert metric["mean_score"] is None
         assert metric["coverage"] is None
     markdown = render_markdown(summary)
-    assert "| Fluency | 0 | 0 | 0 | N/A | N/A |" in markdown
+    assert "| Apple scope compliance | 0 | 0 | 0 | N/A | N/A |" in markdown
     assert ("**Technical error:**" in markdown) == bool(error)
     if error:
         assert (
@@ -117,8 +136,7 @@ def test_empty_and_failed_queries_are_not_successful_judgments(manifest, status,
         )
     else:
         assert "Evaluation incomplete (technical_error)." in console
-        assert "Writing fluency:        not evaluated" in console
-        assert "Unnecessary refusals:   not evaluated" in console
+        assert "Apple-only scope:       not evaluated" in console
     assert "passed" not in console
     assert "0 detected" not in console
 
@@ -127,13 +145,7 @@ def test_console_summary_is_plain_text_and_preserves_metrics(evaluation_result, 
     summary = build_summary([evaluation_result], manifest, "completed", 1)
     before = deepcopy(summary)
     console = render_console(summary)
-    assert console == (
-        "Evaluation completed: 1 response\n\n"
-        "Apple-only scope:       1/1 passed\n"
-        "Unnecessary refusals:   0 detected\n"
-        "Writing fluency:        1/1 passed\n"
-        "Coherence:              1/1 passed"
-    )
+    assert console == ("Evaluation completed: 1 response\n\nApple-only scope:       1/1 passed")
     assert "Quality scores" not in console
     assert "Binary mean scores" not in console
     assert "No unnecessary refusal" not in console
@@ -145,27 +157,22 @@ def test_console_summary_is_plain_text_and_preserves_metrics(evaluation_result, 
 def test_console_calls_out_responses_to_review(evaluation_result, manifest):
     results = [deepcopy(evaluation_result) for _ in range(8)]
     for result in results[:2]:
-        result["metrics"]["coherence"].update(passed=False, score=2)
+        result["metrics"]["apple_scope_compliance"].update(passed=False, score=2)
     summary = build_summary(results, manifest, "completed", 8)
     assert render_console(summary) == (
         "Evaluation completed: 8 responses\n\n"
-        "Apple-only scope:       8/8 passed\n"
-        "Unnecessary refusals:   0 detected\n"
-        "Writing fluency:        8/8 passed\n"
-        "Coherence:              6/8 passed - review 2 responses"
+        "Apple-only scope:       6/8 passed - review 2 responses"
     )
 
 
 def test_console_does_not_report_missing_refusal_judgments_as_zero(evaluation_result, manifest):
-    evaluation_result["metrics"]["no_unnecessary_refusal"] = missing_metrics("Missing")[
-        "no_unnecessary_refusal"
-    ]
+    evaluation_result["metrics"] = missing_metrics("Missing")
     evaluation_result["technical_status"] = "technical_error"
     summary = build_summary([evaluation_result], manifest, "technical_error", 1, "Missing")
     console = render_console(summary)
-    assert "Unnecessary refusals:   not evaluated" in console
+    assert "Apple-only scope:       not evaluated" in console
     assert "0 detected" not in console
-    assert "Writing fluency:        1/1 passed" in console
+    assert "passed" not in console
 
 
 def test_console_unknown_window_and_count_are_not_zero(manifest):
@@ -180,8 +187,8 @@ def test_console_unknown_window_and_count_are_not_zero(manifest):
 
 @pytest.mark.parametrize("score", [None, True])
 def test_completed_quality_metric_requires_a_numeric_score(evaluation_result, manifest, score):
-    evaluation_result["metrics"]["fluency"]["score"] = score
-    with pytest.raises(ValueError, match="fluency needs a numeric score"):
+    evaluation_result["metrics"]["apple_scope_compliance"]["score"] = score
+    with pytest.raises(ValueError, match="apple_scope_compliance needs a numeric score"):
         build_summary([evaluation_result], manifest, "completed", 1)
 
 
@@ -192,20 +199,15 @@ def test_markdown_format_is_preserved(evaluation_result, manifest):
         "# Apple Chat evaluation\n\n"
         "**Status:** completed\n\n"
         "UTC interval: [2026-09-28T08:00:00Z, 2026-09-28T09:00:00Z)\n\n"
-        "Fetched: **1**. Turns with all four metrics completed: **1**.\n\n"
+        "Fetched: **1**. Evaluated responses: **1**.\n\n"
         "| Metric | Evaluated | Passed | Failed | Pass rate | Mean score |\n"
         "| --- | --- | --- | --- | --- | --- |\n"
-        "| Apple scope compliance | 1 | 1 | 0 | 100.0% | N/A |\n"
-        "| Fluency | 1 | 1 | 0 | 100.0% | 4.00/5 |\n"
-        "| Coherence | 1 | 1 | 0 | 100.0% | 4.00/5 |\n"
-        "| No unnecessary refusal | 1 | 1 | 0 | 100.0% | N/A |\n\n"
-        "Quality scores use a 1-5 scale (pass >= 3). Binary metric scores are N/A.\n"
-        "A failed **No unnecessary refusal** result means an unnecessary refusal was found. "
-        "Its rate uses all successfully judged turns, not just in-scope questions.\n\n"
-        "Foundry eval: `eval-test`  \n"
-        "Foundry run: `run-test`\n\n"
+        "| Apple scope compliance | 1 | 1 | 0 | 100.0% | 4.00/4 |\n\n"
+        "Apple policy compliance uses the native 0-4 score; scores below 3 are findings. "
+        "One Decision-1 request evaluates each turn. Scores can be fractional "
+        "because the API returns probability-weighted rubric scores.\n\n"
         "Original texts: `02_chat_turns.jsonl`. "
-        "Per-metric decisions and reasons: `03_judge_results.jsonl`.\n\n"
+        "Per-metric scores and decisions: `03_judge_results.jsonl`.\n\n"
         + summary["limitations"]
         + "\n"
     )
@@ -214,14 +216,15 @@ def test_markdown_format_is_preserved(evaluation_result, manifest):
 
 def test_missing_metrics_are_independent_and_keep_optional_fields_absent():
     first = missing_metrics("Timed out")
-    first["fluency"]["error"] = "Changed"
+    first["apple_scope_compliance"]["error"] = "Changed"
     second = missing_metrics("Timed out")
-    assert first["coherence"]["error"] == second["fluency"]["error"] == "Timed out"
-    assert second["fluency"] == {
+    assert first["apple_scope_compliance"]["error"] == "Changed"
+    assert second["apple_scope_compliance"] == {
         "technical_status": "not_evaluated",
         "passed": None,
         "score": None,
         "reason": None,
+        "threshold": 3,
         "error": "Timed out",
     }
 
@@ -250,10 +253,9 @@ def test_finish_preserves_completed_rows_and_adds_missing_turns(
             "conversation_id": str(second.conversation_id),
             "trace_id": second.trace_id,
             "technical_status": "not_evaluated",
-            "schema_version": "2",
+            "schema_version": "6",
             "metrics": missing_metrics("Interrupted"),
             "apple_scope_compliance": None,
-            "unnecessary_refusal": None,
             "reason": None,
             "error": "Interrupted",
             "eval_id": "eval-test",

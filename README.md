@@ -16,10 +16,10 @@ model-based judgments can vary and should be calibrated against human assessment
 runs locally, uses an Azure Foundry model, and is instructed to answer apple-related
 questions while refusing unrelated topics. OpenTelemetry records the original
 questions, answers and conversation context in Azure. A separate, noninteractive CLI
-uses Foundry dataset evaluation and a separate judge model to assess four independent
-metrics: apple scope compliance, fluency, coherence and unnecessary refusal.
-It evaluates the recorded answers, not newly generated replacements, and shows the
-results in the console while preserving detailed report files.
+retrieves those original turns and scores them with Microsoft-Decision-1 through its
+native Foundry decision API. One request per turn assesses one clear metric:
+apple scope compliance. Results appear
+in the console and detailed local report files; no replacement answers are generated.
 
 This is a reference demo for developers, not a calibrated production quality gate.
 
@@ -74,8 +74,11 @@ if ($LASTEXITCODE -ne 0 -or !$env:AZURE_PRINCIPAL_ID) { throw "Cannot resolve th
 ```
 
 The template creates `rg-evolutions-demo` in `swedencentral`;
-`apple-chat` uses GPT-4.1-mini and `apple-judge` uses GPT-4.1.
-Availability, quota and version lifetimes vary. Azure usage is billed to your subscription.
+`apple-chat` uses GPT-4.1-mini and `apple-judge` uses Microsoft-Decision-1.
+Decision-1 is a preview model; as of October 2026, the Sweden Central model catalog
+lists an inference deprecation date of 2027-02-04. Confirm availability and lifecycle
+before deploying.
+Azure usage is billed to your subscription.
 For private overrides, copy the parameter file to `infra\demo.local.bicepparam`
 and pass `-ParametersFile .\infra\demo.local.bicepparam` to the deployment script.
 
@@ -86,12 +89,15 @@ It does not discover arbitrary existing resources.
 
 **Other existing Azure resources:** copy `.env.example` to `.env` only if missing,
 then fill in the project endpoint, distinct chat/judge deployment names, telemetry
-connection string, workspace ID and tenant ID. Use a Foundry project with compatible
-chat/judge models and workspace-based Application Insights linked to that workspace.
-Match the runtime roles and scopes in [the Bicep template](infra/resources.bicep):
-the local user needs project/model access, log reading and telemetry publishing;
-the project's managed identity also needs model access. Provisioning permissions
-are separate from these runtime roles. Do not run `configure.ps1` for this path.
+connection string, workspace ID and tenant ID. The judge deployment must be a
+Microsoft-Decision-1 model on the same Foundry account; the CLI calls the account's
+native Decision API directly through its Cognitive Services endpoint, derived from
+the project endpoint. Use workspace-based Application Insights linked to that
+workspace. Match the runtime roles and scopes in [the Bicep template](infra/resources.bicep):
+the local user needs account-scoped Cognitive Services User for model inference,
+Foundry User at the project, log reading and telemetry publishing.
+Provisioning permissions are separate from these runtime roles. Do not run
+`configure.ps1` for this path.
 
 ## 2. Start the chat
 
@@ -139,7 +145,7 @@ frozen in UTC:
 .\.venv\Scripts\python -m demo.evaluation.run --output-dir artifacts
 ```
 
-**Prompt compatibility:** quality metrics support English responses only.
+**Prompt compatibility:** the rubrics assess the English apple-only chat policy.
 The guard checks exactly `prompt_version == "chat-en-v2"`, not the text's language.
 Any other version (even a new English prompt) fails visibly; nothing is silently
 skipped or translated. An interval containing older Finnish logs therefore fails.
@@ -147,14 +153,20 @@ skipped or translated. An interval containing older Finnish logs therefore fails
 | Metric | Meaning |
 | --- | --- |
 | Apple scope compliance | Apple-only content or a generic refusal, even if unhelpful; explaining another fruit fails, even in a comparison. |
-| Fluency | Writing fluency, 1-5; pass at 3+. |
-| Coherence | Logical writing for the current question/response, 1-5; pass at 3+. |
-| No unnecessary refusal | Fails when a harmless apple request is refused, including the answerable apple part of a mixed request. |
 
-Metrics are independent: scope checks topic boundaries, while **No unnecessary refusal**
-checks whether refusal is appropriate. Good writing cannot offset a scope violation.
-Judges are not calibrated, may vary between runs and do not verify factual truth.
-Short replies can make quality scores less reliable. Groundedness is not included.
+Each response uses Decision-1's native **0-4 apple policy score**, defined by the
+five ordered rubric levels. Scores **below 3 require review**; scores **3-4 pass**.
+Decision-1 returns a probability-weighted score that can be fractional; any score below
+3 fails. No offset or rounding is applied before deciding pass/fail.
+This demo checks topic boundaries only: a generic refusal is accepted,
+even if unhelpful. Helpfulness and unnecessary refusal are not evaluated.
+Decision-1 provides no written rationale. Scores are not calibrated against
+human labels and do not verify factual truth. Short replies can make scores less reliable.
+Groundedness is not included.
+
+New runs use the single-metric `decision-scores-v3` rubric and report schema version 6.
+The manifest records the 0-4 scale and pass threshold 3. Older reports remain unchanged:
+their 1-5 scores equal the native scores plus one, with an equivalent pass threshold of 4.
 
 ## 4. Read the results
 
@@ -162,9 +174,9 @@ While the CLI reads logs and evaluates responses, growing dots indicate activity
 an interactive terminal. Redirected output and CI logs get one plain-text message per
 phase instead of animation. Progress goes to stderr; the final summary goes to stdout.
 
-The console shows response counts, scope/fluency/coherence pass counts, unnecessary
-refusals detected, and responses to review. Missing judgments are not reported as
-passes or zero findings; empty queries and technical failures are explicit.
+The console shows response counts, apple policy pass counts, and responses
+to review. Missing judgments are not reported as passes or zero findings; empty queries
+and technical failures are explicit.
 `Details:` points directly to **`01_summary.md`** in the new `artifacts\<run>` folder.
 The UTC interval, detailed metric table, mean scores and thresholds remain in that
 report and the JSON artifacts. Reports are local and are not included in the public
@@ -172,15 +184,15 @@ repository. The run folder contains three primary files:
 
 | File | Read it for |
 | --- | --- |
-| `01_summary.md` | Human-readable overview and run status |
+| `01_summary.md` | Single report with run status and one row per response: apple policy grade, original request, AI response and rule-based score interpretation (Decision-1 does not generate written rationales) |
 | `02_chat_turns.jsonl` | Selected chat turns: each row contains the user's question, the AI's original response, prior conversation context and identifiers |
-| `03_judge_results.jsonl` | Structured judge decisions and reasons per metric, linked to input by `turn_id`; technical status marks missing or failed evaluations |
+| `03_judge_results.jsonl` | Structured Decision-1 scores and pass/fail decisions per metric, linked to input by `turn_id`; no free-text rationale is generated |
 
 The `technical` subfolder holds `04_summary.json` (machine-readable aggregates),
-`05_run-manifest.json` (time window, hashes, versions and remote run IDs),
-`06_raw-log-records.json` and `07_foundry-output.jsonl` (raw evidence).
-These support automation and diagnosis; raw files appear when the corresponding
-query results or output records are received.
+`05_run-manifest.json` (time window, hashes and model/rubric versions),
+`06_raw-log-records.json` and `07_decision-output.jsonl` (raw evidence).
+Decision-1 has no natural-language rationale; the raw file preserves its structured
+scores and token usage.
 
 Prefixes indicate reading order, not creation order. Existing runs keep their
 original layout and filenames; nothing is renamed or overwritten.
@@ -192,12 +204,11 @@ original layout and filenames; nothing is renamed or overwritten.
 | Technical error, including a missing metric | 1 |
 | Invalid CLI syntax / Ctrl+C | 2 / 130 |
 
-Partial metric successes remain reportable; each metric uses its own evaluated
-count. `unnecessary_refusal=true` means the **No unnecessary refusal** check failed.
+Completed response scores remain reportable if a later response fails technically.
 `no_data` does not prove compliance. For technical errors, read the manifest and stderr.
 
 **First-run acceptance:** find both of your original turns in `02_chat_turns.jsonl`, and
-match each `turn_id` to four completed metric results in `03_judge_results.jsonl`.
+match each `turn_id` to its completed apple policy score in `03_judge_results.jsonl`.
 The expected chat behavior is an apple answer and an out-of-scope refusal, but
 judge scores are not fixed. Exit 0 or `no_data` alone does not demonstrate end-to-end success.
 
@@ -227,8 +238,8 @@ Do not publish `.env` or `artifacts`.
 | Change | Where |
 | --- | --- |
 | Chat behavior | Add a versioned file in `demo\prompts\`; update `CHAT_PROMPT_VERSION` in `demo\chat\model.py`. |
-| Judge rubrics | Version the custom scope/refusal prompts; update `CUSTOM_PROMPTS` (and `EVALUATOR_PROMPT_VERSION` for scope) in `demo\evaluation\foundry.py`. Keep model instructions separate from evaluated data. |
-| Prompt compatibility | Update `ENGLISH_PROMPT_VERSION` in `demo\evaluation\foundry.py` only after verifying the new chat prompt is compatible with the English-only metrics; update affected tests. |
+| Judge rubrics | Version `demo\prompts\decision-scores-vN.json`; keep metric instructions separate from the evaluated turn data. |
+| Prompt compatibility | Update the `chat-en-v2` guard in `demo\evaluation\decision.py` only after verifying the new chat prompt's apple policy matches the rubrics; update affected tests. |
 | Azure resources/models | Review `infra\demo.bicepparam` for new resources, or `.env` for existing deployments. Keep chat and judge separate. |
 
 Before using results as a release gate, create human-labeled reference cases,
@@ -240,22 +251,29 @@ and a calibration workflow are not implemented yet.
 | Path | Purpose |
 | --- | --- |
 | `demo\chat\` | Browser UI, API, model calls and telemetry |
-| `demo\evaluation\` | `run.py` -> `logs.py` -> `foundry.py` -> `reports.py` |
+| `demo\evaluation\` | `run.py` -> `logs.py` -> `decision.py` -> `reports.py` |
 | `demo\evaluation\models.py` | Typed result/summary contracts and shared metric definitions |
 | `demo\prompts\` | Versioned model instructions |
 | `demo\settings.py`, `contracts.py` | Configuration, data format and limits |
 | `infra\`, `scripts\`, `tests\` | Bicep, helper commands and tests |
 
-Foundry output is validated at the SDK boundary. Internal results use `TypedDict`
-contracts without changing the JSON format. In `reports.py`, `build_summary()`,
+Decision API output is validated before reporting. Internal results use `TypedDict`
+contracts. In `reports.py`, `build_summary()`,
 `render_console()` and `render_markdown()` are pure functions; `Reports` handles
 files and run bookkeeping.
 
 Keep `.venv` to avoid reinstalling dependencies. Tool caches are disposable.
 Chats allow up to 8 turns and 1,000 UTF-8 bytes per question; context limits may
 require a new conversation sooner. Queries over 1,000 raw rows or 5 MB of eval
-input fail visibly: narrow the interval, rather than truncate data.
-A timed-out Foundry run may continue; check its manifest IDs before retrying.
+input fail visibly: narrow the interval, rather than truncate data. Decision API
+HTTP 429 responses are retried up to five times per turn, honoring `Retry-After`
+(including millisecond and HTTP-date headers). Without a valid header, waits start
+at 60 seconds and increase to 120 seconds. Waiting counts toward the evaluation
+timeout (default 600 seconds); use `--timeout-seconds 1800` for a throttled batch.
+Retry waits show the response's position in the batch (for example, `response 3/8`),
+its turn ID and retry attempt; these details are preserved in raw output.
+Other HTTP or network failures
+are not retried; technical failures preserve completed rows and raw response evidence.
 
 <details>
 <summary>Developer checks</summary>
@@ -266,7 +284,7 @@ A timed-out Foundry run may continue; check its manifest IDs before retrying.
 .\.venv\Scripts\mypy demo
 # Optional keyboard test: Node.js 18+, no npm dependencies
 node --test .\tests\chat-keyboard.test.cjs
-# Real Azure model -> logs -> evaluation probe
+# Real Azure model -> logs -> Decision-1 scoring probe
 .\.venv\Scripts\python -m scripts.sdk_probe
 ```
 

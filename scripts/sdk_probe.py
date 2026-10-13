@@ -1,4 +1,4 @@
-"""Early live probe: model -> AppTraces ingestion -> custom dataset evaluation."""
+"""Live probe: chat model -> AppTraces ingestion -> Microsoft-Decision-1 scoring."""
 
 import json
 import time
@@ -13,7 +13,12 @@ from opentelemetry import trace
 from demo.chat.model import CHAT_PROMPT_VERSION, ChatModel
 from demo.chat.telemetry import Telemetry
 from demo.contracts import ChatTurn, utc_now
-from demo.evaluation.foundry import evaluate
+from demo.evaluation.decision import (
+    JUDGE_MODEL,
+    JUDGE_MODEL_VERSION,
+    JUDGE_PROMPT_VERSION,
+    evaluate,
+)
 from demo.evaluation.logs import fetch
 from demo.settings import Settings, credential
 
@@ -21,8 +26,8 @@ from demo.settings import Settings, credential
 def main() -> None:
     # This live diagnostic creates one synthetic turn; it is not the normal batch eval CLI.
     settings = Settings.load(chat=True)
-    # Keep each probe's original payload, ingestion evidence and remote run IDs together.
-    output = Path("artifacts") / ("sdk-probe-" + utc_now().strftime("%Y%m%dT%H%M%SZ"))
+    # Keep each probe's original payload, ingestion evidence and decision outputs together.
+    output = Path("artifacts") / ("decision-probe-" + utc_now().strftime("%Y%m%dT%H%M%SZ"))
     output.mkdir(parents=True, exist_ok=False)
     assert settings.connection_string
     with (
@@ -83,32 +88,40 @@ def main() -> None:
                 print("Waiting for actual AppTraces ingestion...", flush=True)
                 time.sleep(15)
             print("AppTraces payload and hash verified.", flush=True)
-            manifest: dict = {"turn_id": str(turn.turn_id)}
+            manifest: dict = {
+                "turn_id": str(turn.turn_id),
+                "judge_model": JUDGE_MODEL,
+                "judge_model_version": JUDGE_MODEL_VERSION,
+                "judge_deployment": settings.judge_deployment,
+                "judge_prompt_version": JUDGE_PROMPT_VERSION,
+            }
 
             def update(**values: object) -> None:
-                # Save IDs as the eval progresses; the cloud run may outlive a local timeout.
+                # Save the scoring stage before proceeding, so failures retain their evidence.
                 manifest.update(values)
                 (output / "manifest.json").write_text(
                     json.dumps(manifest, indent=2), encoding="utf-8"
                 )
                 print(values, flush=True)
 
-            # Judge the ingested original response, not a newly generated model-target response.
+            # Score the ingested original response, not a newly generated replacement.
             results = list(
                 evaluate(
-                    project,
+                    settings.resource_endpoint,
                     settings.judge_deployment,
+                    auth,
                     match,
                     update,
                     lambda raw: (output / "raw-result.json").write_text(
                         json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8"
                     ),
+                    timeout_seconds=600,
                 )
             )
             (output / "results.json").write_text(
                 json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-            print(f"Live SDK probe completed: {output}", flush=True)
+            print(f"Live Decision-1 probe completed: {output}", flush=True)
         finally:
             # Release exporters even if model calls, ingestion checks or evaluation fail.
             telemetry.close()

@@ -6,19 +6,21 @@ param chatModel string
 param judgeModel string
 param chatVersion string
 param judgeVersion string
-param deploymentSku string
-param capacity int
+param chatDeploymentSku string
+param judgeDeploymentSku string
+param chatCapacity int
+param judgeCapacity int
 
 // Stable names let repeated deployments target the same resources in this resource group.
 var suffix = uniqueString(resourceGroup().id)
 // Built-in role IDs are assigned at individual resource scopes below, not subscription scope.
 var foundryUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '53ca6127-db72-4b80-b1b0-d745d6d5456d')
-var openaiUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
+var cognitiveServicesUserRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a97b65f3-24c7-4388-baec-2e87135dc908')
 var logsReaderRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a893')
 var metricsPublisherRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055eb')
 
 // Evaluation reads original turn payloads from AppTraces in this workspace.
-// This retention policy does not delete local reports or Foundry evaluation records.
+// This retention policy does not delete the CLI's local evaluation reports.
 resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: 'log-evolutions-${suffix}'
   location: location
@@ -69,17 +71,13 @@ resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   }
 }
 
-// The project identity is used for service-side evaluation and receives model access below.
 resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
   parent: account
   name: 'evolutions-demo'
   location: location
-  identity: {
-    type: 'SystemAssigned'
-  }
   properties: {
     displayName: 'Evolutions apple demo'
-    description: 'Local apple chat and original-response dataset evaluations. Synthetic data only.'
+    description: 'Local apple chat and original-response Decision-1 scoring. Synthetic data only.'
   }
   // Serialize account child writes: chat -> judge -> project, avoiding RequestConflict errors.
   dependsOn: [
@@ -88,13 +86,12 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
 }
 
 // Separate deployments prevent the answering model from also being its own judge.
-// Both deployments pin model versions; upgrades must be an explicit parameter change.
 resource chat 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
   parent: account
   name: 'apple-chat'
   sku: {
-    name: deploymentSku
-    capacity: capacity
+    name: chatDeploymentSku
+    capacity: chatCapacity
   }
   properties: {
     model: {
@@ -110,16 +107,15 @@ resource judge 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
   parent: account
   name: 'apple-judge'
   sku: {
-    name: deploymentSku
-    capacity: capacity
+    name: judgeDeploymentSku
+    capacity: judgeCapacity
   }
   properties: {
     model: {
-      format: 'OpenAI'
+      format: 'Microsoft'
       name: judgeModel
       version: judgeVersion
     }
-    versionUpgradeOption: 'NoAutoUpgrade'
   }
   // Do not deploy sibling models concurrently on the same Foundry account.
   dependsOn: [
@@ -127,7 +123,7 @@ resource judge 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
   ]
 }
 
-// The local user manages evaluator definitions and evaluation runs in this project.
+// The local user accesses the project for the chat deployment.
 resource projectUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(project.id, principalId, foundryUserRole)
   scope: project
@@ -138,25 +134,14 @@ resource projectUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-// Local model calls need account-level model access in addition to project access.
+// Entra inference for Foundry Models, including the native Decision API, requires this account role.
 resource modelUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(account.id, principalId, openaiUserRole)
+  name: guid(account.id, principalId, cognitiveServicesUserRole)
   scope: account
   properties: {
     principalId: principalId
     principalType: 'User'
-    roleDefinitionId: openaiUserRole
-  }
-}
-
-// Cloud-side judging uses the project's managed identity, not the local user's credential.
-resource projectModelUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(account.id, project.id, openaiUserRole)
-  scope: account
-  properties: {
-    principalId: project.identity.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: openaiUserRole
+    roleDefinitionId: cognitiveServicesUserRole
   }
 }
 

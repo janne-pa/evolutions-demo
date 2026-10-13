@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 
 from demo.contracts import ChatTurn
-from demo.evaluation.models import METRIC_NAMES, QUALITY_METRICS, TurnEvaluation
+from demo.evaluation.models import METRIC_NAMES, TurnEvaluation
 
 
 @pytest.fixture
@@ -32,22 +32,21 @@ def evaluation_result(turn) -> TurnEvaluation:
         "turn_id": str(turn.turn_id),
         "conversation_id": str(turn.conversation_id),
         "trace_id": turn.trace_id,
-        "schema_version": "2",
+        "schema_version": "6",
         "technical_status": "completed",
         "metrics": {
             name: {
                 "technical_status": "completed",
                 "passed": True,
-                "score": 4 if name in QUALITY_METRICS else None,
-                "threshold": 3 if name in QUALITY_METRICS else None,
-                "reason": "Test double",
+                "score": 4.0,
+                "threshold": 3,
+                "reason": None,
                 "judge_model": "judge-test",
             }
             for name in METRIC_NAMES
         },
         "apple_scope_compliance": True,
-        "unnecessary_refusal": False,
-        "reason": "Test double",
+        "reason": None,
         "eval_id": "eval-test",
         "run_id": "run-test",
     }

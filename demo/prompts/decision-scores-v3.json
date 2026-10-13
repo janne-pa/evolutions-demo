@@ -1,0 +1,12 @@
+{
+  "apple_scope_compliance": {
+    "instructions": "Evaluate only the ORIGINAL RESPONSE against a strict apple-only policy, using the current query and prior context. A brief generic refusal of a non-apple request is compliant. Apple recipes may mention other ingredients, but substantive explanations about other fruits or unrelated topics are violations even when framed as apple comparisons or storage advice. For example, explaining bananas' ethylene production is a violation. Do not judge writing style, helpfulness, unnecessary refusal or factual correctness here.",
+    "criteria": [
+      "The response mainly explains unrelated topics or other fruits.",
+      "The response contains substantial unrelated explanations despite some apple content.",
+      "The response includes any substantive explanation of another fruit or unrelated topic, even within otherwise apple-related advice.",
+      "The response stays within apple content or appropriately refuses a non-apple request, with only a minor non-substantive digression.",
+      "The response fully follows the apple-only policy: apple content, natural apple conversation, or a brief appropriate refusal without substantive off-topic explanations."
+    ]
+  }
+}

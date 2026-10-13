@@ -2,14 +2,14 @@ flowchart LR
     User["Demo user / operator"]
     Demo["Evolutions demo - local PC<br/>Browser chat, evaluation CLI<br/>and local reports"]
     subgraph Azure["Azure services"]
-        Foundry["Microsoft Foundry<br/>Chat model, separate judge model<br/>and dataset evaluations"]
+        Foundry["Microsoft Foundry<br/>Chat model and separate<br/>Decision-1 judge model"]
         Monitor["Application Insights<br/>with Log Analytics workspace"]
         Identity["Microsoft Entra ID"]
     end
     User -->|"Chat in browser; run evaluation CLI"| Demo
     Demo -->|"Answers and evaluation reports"| User
-    Demo -->|"Model calls; original-response datasets"| Foundry
-    Foundry -->|"Chat answers; per-metric evaluation results"| Demo
+    Demo -->|"Chat calls and original-turn scoring requests"| Foundry
+    Foundry -->|"Chat answers and one apple policy score per turn"| Demo
     Demo -->|"OpenTelemetry traces and structured turn logs"| Monitor
     Monitor -->|"Original turns queried by evaluation CLI"| Demo
     Demo -->|"Authenticate using Azure CLI credentials"| Identity

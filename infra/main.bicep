@@ -10,10 +10,13 @@ param chatModel string
 param judgeModel string
 param chatVersion string
 param judgeVersion string
-param deploymentSku string
-// Capacity applies to each model deployment, not a shared pool; units depend on model/SKU.
+param chatDeploymentSku string
+param judgeDeploymentSku string
+// Capacity is configured per deployment; units and quota depend on model/SKU.
 @minValue(1)
-param capacity int
+param chatCapacity int
+@minValue(1)
+param judgeCapacity int
 
 // Keep the demo isolated from other projects and mark its data as synthetic.
 resource group 'Microsoft.Resources/resourceGroups@2024-03-01' = {
@@ -36,8 +39,10 @@ module resources 'resources.bicep' = {
     judgeModel: judgeModel
     chatVersion: chatVersion
     judgeVersion: judgeVersion
-    deploymentSku: deploymentSku
-    capacity: capacity
+    chatDeploymentSku: chatDeploymentSku
+    judgeDeploymentSku: judgeDeploymentSku
+    chatCapacity: chatCapacity
+    judgeCapacity: judgeCapacity
   }
 }
 

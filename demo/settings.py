@@ -25,6 +25,16 @@ class Settings:
     workspace_id: str
     connection_string: str | None
 
+    @property
+    def resource_endpoint(self) -> str:
+        parsed = urlparse(self.endpoint)
+        hostname = parsed.hostname
+        suffix = ".services.ai.azure.com"
+        if not hostname or not hostname.endswith(suffix):
+            raise ValueError("Foundry project endpoint has an unsupported resource host.")
+        account_name = hostname.removesuffix(suffix)
+        return f"{parsed.scheme}://{account_name}.cognitiveservices.azure.com"
+
     @classmethod
     def load(cls, *, chat: bool = False) -> "Settings":
         load_dotenv(ROOT / ".env", override=False, encoding="utf-8-sig")

@@ -18,13 +18,13 @@ def prepared(monkeypatch):
         "load",
         lambda: SimpleNamespace(
             endpoint="https://example.services.ai.azure.com/api/projects/demo",
+            resource_endpoint="https://example.cognitiveservices.azure.com",
             judge_deployment="judge",
             workspace_id="workspace",
         ),
     )
     monkeypatch.setattr(run, "credential", MagicMock())
     monkeypatch.setattr(run, "LogsQueryClient", MagicMock())
-    monkeypatch.setattr(run, "AIProjectClient", MagicMock())
     now = datetime(2026, 9, 28, 10, 19, 33, tzinfo=UTC)
     monkeypatch.setattr(run, "utc_now", lambda: now)
     return now
@@ -51,7 +51,7 @@ def files(tmp_path):
         "04_summary.json",
         "05_run-manifest.json",
         "06_raw-log-records.json",
-        "07_foundry-output.jsonl",
+        "07_decision-output.jsonl",
     }
     return folder, summary, manifest
 
@@ -95,19 +95,17 @@ def test_findings_do_not_fail_process(
     if failed_metric in QUALITY_METRICS:
         evaluation_result["metrics"][failed_metric]["score"] = 2
     evaluation_result["apple_scope_compliance"] = failed_metric != "apple_scope_compliance"
-    evaluation_result["unnecessary_refusal"] = failed_metric == "no_unnecessary_refusal"
     monkeypatch.setattr(run, "evaluate", lambda *args: iter([evaluation_result]))
     assert run.main(["--output-dir", str(tmp_path)]) == 0
     folder, summary, _ = files(tmp_path)
     progress_output = assert_console_report(capsys, folder, summary)
-    assert progress_output == "Reading chat logs...\nEvaluating responses (1)...\n"
+    assert progress_output == "Reading chat logs...\nScoring responses (1)...\n"
     assert summary["status"] == "completed"
     assert summary["violation_rate"] == (1 if failed_metric == "apple_scope_compliance" else 0)
     assert summary["metrics"][failed_metric]["failed"] == 1
-    assert summary["metrics"]["fluency"]["mean_score"] == (2 if failed_metric == "fluency" else 4)
-    assert summary["unnecessary_refusal_rate"] == (
-        1 if failed_metric == "no_unnecessary_refusal" else 0
-    )
+    assert set(summary["metrics"]) == set(METRIC_NAMES)
+    assert summary["metrics"][failed_metric]["mean_score"] == 2
+    assert "unnecessary_refusal_rate" not in summary
 
 
 def test_technical_failure_keeps_snapshot(prepared, monkeypatch, tmp_path, turn, capsys):
@@ -148,7 +146,7 @@ def test_partial_metrics_remain_reportable(
     monkeypatch.setattr(run, "fetch", lambda *args: [turn])
 
     def partial(*args):
-        evaluation_result["metrics"]["fluency"] = {
+        evaluation_result["metrics"]["apple_scope_compliance"] = {
             "technical_status": "error",
             "passed": None,
             "score": None,
@@ -164,10 +162,9 @@ def test_partial_metrics_remain_reportable(
     folder, summary, _ = files(tmp_path)
     assert_console_report(capsys, folder, summary)
     assert summary["evaluated"] == 0
-    assert summary["metrics"]["fluency"]["mean_score"] is None
-    assert summary["metrics"]["coherence"]["mean_score"] == 4
-    assert summary["metrics"]["apple_scope_compliance"]["evaluated"] == 1
-    assert summary["violation_rate"] == 0
+    assert summary["metrics"]["apple_scope_compliance"]["mean_score"] is None
+    assert summary["metrics"]["apple_scope_compliance"]["evaluated"] == 0
+    assert summary["violation_rate"] is None
 
 
 def test_language_guard_keeps_original_dataset(prepared, monkeypatch, tmp_path, turn, capsys):
@@ -200,7 +197,7 @@ def test_interrupted_run_prints_partial_results_and_keeps_exit_code(
     assert_console_report(capsys, folder, summary)
     assert summary["status"] == "technical_error"
     assert summary["evaluated"] == 1
-    assert summary["metrics"]["fluency"]["mean_score"] == 4
+    assert summary["metrics"]["apple_scope_compliance"]["mean_score"] == 4
     assert "Interrupted" in manifest["error"]
 
 
@@ -215,7 +212,7 @@ def test_three_primary_artifacts_and_existing_runs_are_preserved(
         "04_summary.json",
         "05_run-manifest.json",
         "06_raw-log-records.json",
-        "07_foundry-output.jsonl",
+        "07_decision-output.jsonl",
     ]
     existing = tmp_path / "previous-run"
     existing.mkdir()
@@ -235,8 +232,7 @@ def test_three_primary_artifacts_and_existing_runs_are_preserved(
         preserve(raw_logs)
         return [turn]
 
-    def evaluate(project, judge, turns, update, preserve_raw, timeout):
-        update(eval_id="eval-test", run_id="run-test")
+    def evaluate(endpoint, judge, auth, turns, update, preserve_raw, timeout):
         preserve_raw(raw_output)
         yield evaluation_result
 
@@ -253,7 +249,7 @@ def test_three_primary_artifacts_and_existing_runs_are_preserved(
     assert json.loads((folder / "02_chat_turns.jsonl").read_text()) == turn.model_dump(mode="json")
     assert json.loads((folder / "03_judge_results.jsonl").read_text()) == evaluation_result
     assert json.loads((technical / "06_raw-log-records.json").read_text()) == raw_logs
-    assert json.loads((technical / "07_foundry-output.jsonl").read_text()) == raw_output
+    assert json.loads((technical / "07_decision-output.jsonl").read_text()) == raw_output
     manifest = json.loads((technical / "05_run-manifest.json").read_text())
     assert (
         manifest["input_sha256"]
@@ -288,7 +284,7 @@ def test_invalid_log_payload_keeps_numbered_evidence(prepared, monkeypatch, tmp_
     assert summary["status"] == "technical_error"
     assert summary["fetched"] == 1
     assert summary["evaluated"] == 0
-    assert not (technical / "07_foundry-output.jsonl").exists()
+    assert not (technical / "07_decision-output.jsonl").exists()
     markdown = (folder / "01_summary.md").read_text()
     assert (
         f"see {Path('technical') / '04_summary.json'} "

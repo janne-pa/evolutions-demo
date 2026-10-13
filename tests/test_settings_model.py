@@ -6,7 +6,11 @@ from pydantic import ValidationError
 
 from demo.chat.model import CHAT_PROMPT, ChatModel
 from demo.contracts import Message
-from demo.evaluation.foundry import CUSTOM_PROMPTS, custom_definition
+from demo.evaluation.decision import (
+    JUDGE_PROMPT_VERSION,
+    RUBRICS,
+)
+from demo.evaluation.models import METRIC_NAMES
 from demo.settings import PACKAGE_DIR, ROOT, Settings
 
 
@@ -78,11 +82,21 @@ def test_project_and_resource_paths_are_independent_of_working_directory(monkeyp
     assert ROOT == Path(__file__).resolve().parents[1]
     assert PACKAGE_DIR == ROOT / "demo"
     assert (ROOT / ".env.example").is_file()
-    for name, version in CUSTOM_PROMPTS.items():
-        assert custom_definition(name)["prompt_text"] == (
-            ROOT / "demo" / "prompts" / f"{version}.txt"
-        ).read_text(encoding="utf-8")
+    assert set(RUBRICS) == set(METRIC_NAMES)
+    assert JUDGE_PROMPT_VERSION == "decision-scores-v3"
+    assert (ROOT / "demo" / "prompts" / f"{JUDGE_PROMPT_VERSION}.json").is_file()
     assert CHAT_PROMPT == (ROOT / "demo" / "prompts" / "chat-en-v2.txt").read_text(encoding="utf-8")
+
+
+def test_model_resource_endpoint_uses_cognitive_services_host(monkeypatch):
+    monkeypatch.setattr("demo.settings.load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.setenv(
+        "AZURE_AI_PROJECT_ENDPOINT", "https://demo.services.ai.azure.com/api/projects/demo"
+    )
+    monkeypatch.setenv("LOG_ANALYTICS_WORKSPACE_ID", "workspace")
+    monkeypatch.setenv("JUDGE_DEPLOYMENT", "judge")
+    settings = Settings.load()
+    assert settings.resource_endpoint == "https://demo.cognitiveservices.azure.com"
 
 
 def test_dotenv_is_still_loaded_from_project_root(monkeypatch, tmp_path):

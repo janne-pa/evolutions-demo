@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evolutions-demo"
-version = "0.2.0"
-description = "Local apple chat and evaluation of original responses in Microsoft Foundry"
+version = "0.3.0"
+description = "Local apple chat and Microsoft-Decision-1 evaluation of original responses"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -29,7 +29,13 @@ include = ["demo", "demo.*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-demo = ["prompts/*.txt", "chat/static/*.html", "chat/static/*.js", "chat/static/*.css"]
+demo = [
+  "prompts/*.txt",
+  "prompts/*.json",
+  "chat/static/*.html",
+  "chat/static/*.js",
+  "chat/static/*.css",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
